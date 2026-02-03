@@ -1,0 +1,465 @@
+/**
+ * EXTRACTION CATÉGORIES CRÉATIVES - META ADS v3
+ * Script optimisé pour 100k+ lignes
+ * Avec extraction Week + Ville + Menu complet
+ * 
+ * INSTALLATION :
+ * 1. Extensions > Apps Script
+ * 2. Coller ce code (remplacer tout)
+ * 3. Ctrl+S pour sauvegarder
+ * 4. Exécuter "creerMenu" une première fois (autoriser les accès)
+ * 5. Recharger la page Google Sheets
+ * 6. Le menu "Extraction Créatives" apparaît
+ */
+
+/** @OnlyCurrentDoc */
+
+// ================== CONFIGURATION ==================
+const CONFIG = {
+  DATA_SHEET: 'ads_week_ville',
+  AD_NAME_COL: 2,
+  DATA_START_ROW: 2,
+  OUTPUT_COLS: {
+    MEDIA: 10,        // J
+    CONCEPT: 11,      // K
+    SOUS_CONCEPT: 12, // L
+    VARIANTE: 13,     // M
+    HOOK: 14,         // N
+    CREATEUR: 15,     // O
+    FOMO: 16,         // P
+    WEEK: 17,         // Q
+    VILLE: 18         // R
+  },
+  BATCH_SIZE: 5000
+};
+
+// ================== VALEURS PAR DÉFAUT ==================
+const DEFAULT_VALUES = {
+  MEDIA: 'No Média',
+  CONCEPT: 'No Concept',
+  SOUS_CONCEPT: 'No Sous-Concept',
+  VARIANTE: 'No Variante',
+  HOOK: 'No Hook',
+  CREATEUR: 'No UGC',
+  FOMO: 'No FOMO',
+  WEEK: 'No Week',
+  VILLE: 'No Ville'
+};
+
+// ================== LISTE DES VILLES ==================
+const VILLES = [
+  // France - Paris et IDF
+  'Paris 11 (Bastille)', 'Paris 11 Bastille', 'Bastille Paris 11', 'Paris 11',
+  'Paris 13', 'Paris 10 République', 'Paris 10 Canal', 'Paris 10 REPUBLIQUE Canal',
+  'Paris 19', 'Paris 15 Beaugrenelle', 'Paris 15 Zola', 'Paris 15',
+  'Paris 18 Ordener', 'Paris 18 Jules Joffrin', 'Jules Joffrin',
+  'Levallois-Perret', 'Levallois Perret', 'Créteil', 'Vélizy',
+  'Boulogne', 'Rosny-sous-Bois', 'Rosny sous Bois',
+  'Montreuil', 'Asnières-sur-Seine', 'Asnières sur Seine',
+  'Saint-Germain-en-Laye', 'Saint Germain en Laye',
+  'Jardinerie République',
+  
+  // France - Grandes villes
+  'Lyon', 'Lyon (place Sathonay)', 'Lyon place Sathonay',
+  'Marseille', 'Toulouse', 'Bordeaux', 'Nantes', 'Lille',
+  'Rennes', 'Renes', 'Strasbourg', 'Montpellier', 'Montpeliier',
+  'Nice', 'Grenoble', 'Aix-en-Provence', 'Aix en Provence',
+  'Dijon', 'Angers', 'Reims', 'Le Havre', 'Rouen', 'Tours',
+  'Brest', 'Metz', 'Bayonne', 'Annecy', 'Roubaix',
+  
+  // Belgique
+  'Bruxelles', 'Liège',
+  
+  // Suisse
+  'Genève', 'Lausanne', 'Zürich', 'Zurich', 'Basel', 'Bâle',
+  
+  // Pays-Bas
+  'Amsterdam', 'Rotterdam', 'The Hague', 'La Haye',
+  
+  // Espagne
+  'Barcelone', 'Barcelona', 'Madrid', 'Bilbao',
+  
+  // Allemagne
+  'Berlin', 'Hamburg', 'Hambourg', 'München', 'Munchen', 'Munich',
+  'Köln', 'Koln', 'Cologne', 'Frankfurt', 'Francfort',
+  'Stuttgart', 'Düsseldorf', 'Dusseldorf', 'Dortmund',
+  'Leipzig', 'Dresden', 'Dresde', 'Hannover', 'Hanovre',
+  'Nürnberg', 'Nurnberg', 'Nuremberg', 'Bremen', 'Brême',
+  'Karlsruhe', 'Mannheim', 'Münster', 'Munster',
+  'Braunschweig', 'Freiburg', 'Chemnitz',
+  
+  // Autriche
+  'Wien', 'Vienne', 'Graz'
+];
+
+const VILLES_SORTED = [...VILLES].sort((a, b) => b.length - a.length);
+const VILLE_REGEX = new RegExp(`(${VILLES_SORTED.map(v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'i');
+
+// ================== REGEX PATTERNS ==================
+const REGEX_PATTERNS = {
+  MEDIA: /(STATIQUE|VIDÉO|VIDEO|CARROUSEL)/i,
+  CONCEPT: /(IMMERSION|PLANS DRONE|UGC|MICRO TROTTOIR|VLOG|RÉPONSE COMMENTAIRE|REPONSE COMMENTAIRE|FOCUS PLANTES|FACECAM|FAKE MT|FAUSSES CROYANCES|POINTS BLOQUANTS|TOP 5|MEDIADS|FOMO|DÉZOOM|DEZOOM|ROOM TOUR|3 RAISONS|Old VS New Plants)/i,
+  SOUS_CONCEPT: /(IMMERSION 1|IMMERSION 2|IMMERSION 3|PLANS DRONE LYON 1|PLANS DRONE BXL 1|LOCALISÉ|LOCALISE|INDOOR|VLOG PLANS AMSTERDAM|VLOG TIKTOK 2|VLOG TIKTOK|VLOG 1|FOCUS PLANTES 1|FOCUS PLANTES 2|FAQ|ANGLE ÉCO|ANGLE ECO|EVENTS À THÈME|EVENTS A THEME|Plante offerte)/i,
+  VARIANTE: /(VOIX OFF CARO 2|VOIX OFF CARO|VOIX OFF BÉA|VOIX OFF BEA|VOIX OFF|VO)/i,
+  HOOK: /(HOOK ITW|HOOK MT DUO|HOOK MT|HOOK QQ JOURS|HOOK FOCUS PLANTE 1|HOOK DANS MAG|HOOK DÉBUTANT|HOOK DEBUTANT|HOOK COMPARATIF PRIX|HOOK AMATEUR|HOOK RENTRÉE|HOOK RENTREE|HOOK TRANSITION|HOOK PRIX|HOOK PLANTE OFFERTE|HOOK TIRE UNE CARTE|HOOK LOC FACECAM|HOOK LOC PDC|HOOK PAS CHER|HOOK SI TU HABITES|HOOK AU TÉLÉPHONE|HOOK AU TELEPHONE|HOOK TU SAIS PAS)/i,
+  CREATEUR: /(ALICE VS CARO|ALICE|CARO|THÉA|THEA|CLEM|LISOU|PIKAMODEL|ILOU|MAMAN ET SON BÉBÉ|MAMAN ET SON BEBE|RAMZY|SUZANNE|TRACY|DÉBUTANT|DEBUTANT|ELOISE|ÉLOÏSE|SANDRA|AMANDE|GEENA|BYAME|MIAMCHERIE|MAALIK|CÉLINE|CELINE|ANDREA|FOODIES|FLORISSE|WENDY)/i,
+  FOMO: /(FOMO RÉPONSE COMMENTAIRE|FOMO REPONSE COMMENTAIRE|FOMO DERNIERS JOURS 2|FOMO DERNIERS JOURS|FOMO CE WE|FOMO)/i,
+  WEEK: /W(\d+)/i
+};
+
+// ================== MENU - CRÉATION AUTOMATIQUE ==================
+function onOpen() {
+  creerMenu();
+}
+
+// ================== MENU - CRÉATION MANUELLE ==================
+function creerMenu() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('Extraction Créatives')
+    .addItem('Extraire TOUTES les catégories', 'extractAllCategories')
+    .addItem('Régénérer les catégories', 'regenererCategories')
+    .addSeparator()
+    .addSubMenu(ui.createMenu('Tests')
+      .addItem('Test 100 lignes', 'testExtraction')
+      .addItem('Test 1000 lignes', 'testExtraction1000')
+      .addItem('Debug exemple', 'debugExtraction'))
+    .addSeparator()
+    .addSubMenu(ui.createMenu('Maintenance')
+      .addItem('Effacer colonnes de sortie', 'clearOutputColumns')
+      .addItem('Configurer feuille source', 'configureSourceSheet'))
+    .addSeparator()
+    .addItem('Aide', 'afficherAide')
+    .addToUi();
+}
+
+// ================== RÉGÉNÉRATION COMPLÈTE ==================
+function regenererCategories() {
+  const ui = SpreadsheetApp.getUi();
+  
+  const response = ui.alert(
+    'Régénération des catégories',
+    'Cette action va :\n' +
+    '1. Effacer les colonnes J à R\n' +
+    '2. Ré-extraire toutes les catégories\n\n' +
+    'Continuer ?',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response === ui.Button.YES) {
+    clearOutputColumnsWithoutAlert();
+    extractAllCategories();
+  }
+}
+
+// ================== FONCTION PRINCIPALE ==================
+function extractAllCategories() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  
+  try {
+    const dataSheet = ss.getSheetByName(CONFIG.DATA_SHEET);
+    if (!dataSheet) {
+      throw new Error(`Feuille "${CONFIG.DATA_SHEET}" introuvable.\n\nVérifiez le nom dans CONFIG.DATA_SHEET ou utilisez "Configurer feuille source".`);
+    }
+    
+    const lastRow = dataSheet.getLastRow();
+    const totalRows = lastRow - CONFIG.DATA_START_ROW + 1;
+    
+    if (totalRows <= 0) {
+      throw new Error('Aucune donnée à traiter');
+    }
+    
+    console.log(`Traitement de ${totalRows} lignes...`);
+    
+    const totalBatches = Math.ceil(totalRows / CONFIG.BATCH_SIZE);
+    let processedRows = 0;
+    const startTime = new Date();
+    
+    for (let batch = 0; batch < totalBatches; batch++) {
+      const startRow = CONFIG.DATA_START_ROW + (batch * CONFIG.BATCH_SIZE);
+      const batchSize = Math.min(CONFIG.BATCH_SIZE, lastRow - startRow + 1);
+      
+      console.log(`Batch ${batch + 1}/${totalBatches} (lignes ${startRow} à ${startRow + batchSize - 1})`);
+      
+      processBatch(dataSheet, startRow, batchSize);
+      processedRows += batchSize;
+      
+      if (batch < totalBatches - 1) {
+        Utilities.sleep(100);
+      }
+    }
+    
+    const endTime = new Date();
+    const duration = ((endTime - startTime) / 1000).toFixed(1);
+    
+    ui.alert('Extraction terminée', 
+      `${processedRows} lignes traitées en ${duration}s\n\n` +
+      `Colonnes mises à jour :\n` +
+      `J: Média | K: Concept | L: Sous-Concept\n` +
+      `M: Variante | N: Hook | O: Créateur\n` +
+      `P: FOMO | Q: Week | R: Ville`,
+      ui.ButtonSet.OK);
+    
+  } catch (error) {
+    console.error('Erreur:', error);
+    ui.alert('Erreur', error.toString(), ui.ButtonSet.OK);
+  }
+}
+
+// ================== TRAITEMENT PAR BATCH ==================
+function processBatch(sheet, startRow, numRows) {
+  const adNames = sheet.getRange(startRow, CONFIG.AD_NAME_COL, numRows, 1).getValues();
+  const results = [];
+  
+  for (let i = 0; i < adNames.length; i++) {
+    const adName = String(adNames[i][0] || '');
+    const adNameUpper = adName.toUpperCase();
+    
+    if (!adName || adName.trim() === '') {
+      results.push([
+        DEFAULT_VALUES.MEDIA,
+        DEFAULT_VALUES.CONCEPT,
+        DEFAULT_VALUES.SOUS_CONCEPT,
+        DEFAULT_VALUES.VARIANTE,
+        DEFAULT_VALUES.HOOK,
+        DEFAULT_VALUES.CREATEUR,
+        DEFAULT_VALUES.FOMO,
+        DEFAULT_VALUES.WEEK,
+        DEFAULT_VALUES.VILLE
+      ]);
+      continue;
+    }
+    
+    const extracted = extractCategories(adName, adNameUpper);
+    results.push([
+      extracted.media,
+      extracted.concept,
+      extracted.sousConept,
+      extracted.variante,
+      extracted.hook,
+      extracted.createur,
+      extracted.fomo,
+      extracted.week,
+      extracted.ville
+    ]);
+  }
+  
+  const outputStartCol = CONFIG.OUTPUT_COLS.MEDIA;
+  const outputNumCols = 9;
+  
+  sheet.getRange(startRow, outputStartCol, numRows, outputNumCols).setValues(results);
+}
+
+// ================== EXTRACTION DES CATÉGORIES ==================
+function extractCategories(adName, adNameUpper) {
+  return {
+    media: extractAndFormat(adNameUpper, REGEX_PATTERNS.MEDIA, DEFAULT_VALUES.MEDIA),
+    concept: extractAndFormat(adNameUpper, REGEX_PATTERNS.CONCEPT, DEFAULT_VALUES.CONCEPT),
+    sousConept: extractAndFormat(adNameUpper, REGEX_PATTERNS.SOUS_CONCEPT, DEFAULT_VALUES.SOUS_CONCEPT),
+    variante: extractAndFormat(adNameUpper, REGEX_PATTERNS.VARIANTE, DEFAULT_VALUES.VARIANTE),
+    hook: extractAndFormat(adNameUpper, REGEX_PATTERNS.HOOK, DEFAULT_VALUES.HOOK),
+    createur: extractAndFormat(adNameUpper, REGEX_PATTERNS.CREATEUR, DEFAULT_VALUES.CREATEUR),
+    fomo: extractFomo(adNameUpper),
+    week: extractWeek(adNameUpper),
+    ville: extractVille(adName)
+  };
+}
+
+function extractAndFormat(text, regex, defaultValue) {
+  try {
+    const match = text.match(regex);
+    if (match && match[1]) {
+      return toProperCase(match[1].replace(/-/g, ' '));
+    }
+    return defaultValue;
+  } catch (e) {
+    return defaultValue;
+  }
+}
+
+function extractFomo(text) {
+  const fomoPatterns = [
+    'FOMO RÉPONSE COMMENTAIRE', 'FOMO REPONSE COMMENTAIRE',
+    'FOMO DERNIERS JOURS 2', 'FOMO DERNIERS JOURS',
+    'FOMO CE WE'
+  ];
+  
+  for (const pattern of fomoPatterns) {
+    if (text.includes(pattern)) {
+      return toProperCase(pattern);
+    }
+  }
+  
+  if (/\bFOMO\b/.test(text)) {
+    return 'Fomo';
+  }
+  
+  return DEFAULT_VALUES.FOMO;
+}
+
+function extractWeek(text) {
+  const match = text.match(/W(\d+)/i);
+  if (match && match[1]) {
+    return 'W' + match[1].padStart(2, '0');
+  }
+  return DEFAULT_VALUES.WEEK;
+}
+
+function extractVille(text) {
+  const afterEventMatch = text.match(/Event\s+W\d+\s+([^-]+)/i);
+  if (afterEventMatch && afterEventMatch[1]) {
+    const potentialVille = afterEventMatch[1].trim();
+    
+    for (const ville of VILLES_SORTED) {
+      if (potentialVille.toLowerCase().includes(ville.toLowerCase())) {
+        return toProperCase(ville);
+      }
+    }
+    
+    if (potentialVille.length > 2 && potentialVille.length < 50) {
+      return toProperCase(potentialVille);
+    }
+  }
+  
+  const villeMatch = text.match(VILLE_REGEX);
+  if (villeMatch && villeMatch[1]) {
+    return toProperCase(villeMatch[1]);
+  }
+  
+  return DEFAULT_VALUES.VILLE;
+}
+
+function toProperCase(str) {
+  return str.toLowerCase().split(' ').map(word => {
+    if (word.length === 0) return '';
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }).join(' ').trim();
+}
+
+// ================== FONCTIONS UTILITAIRES ==================
+function clearOutputColumns() {
+  clearOutputColumnsWithoutAlert();
+  SpreadsheetApp.getUi().alert('Colonnes effacées', 
+    'Colonnes J à R effacées.',
+    SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function clearOutputColumnsWithoutAlert() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.DATA_SHEET);
+  
+  if (!sheet) return;
+  
+  const lastRow = sheet.getLastRow();
+  const startCol = CONFIG.OUTPUT_COLS.MEDIA;
+  const numCols = 9;
+  
+  if (lastRow >= CONFIG.DATA_START_ROW) {
+    sheet.getRange(CONFIG.DATA_START_ROW, startCol, lastRow - CONFIG.DATA_START_ROW + 1, numCols).clearContent();
+  }
+}
+
+function testExtraction() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.DATA_SHEET);
+  
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Erreur', `Feuille "${CONFIG.DATA_SHEET}" non trouvée`, SpreadsheetApp.getUi().ButtonSet.OK);
+    return;
+  }
+  
+  const lastRow = sheet.getLastRow();
+  const numRows = Math.min(100, lastRow - CONFIG.DATA_START_ROW + 1);
+  
+  processBatch(sheet, CONFIG.DATA_START_ROW, numRows);
+  
+  SpreadsheetApp.getUi().alert('Test terminé', 
+    `${numRows} premières lignes traitées.\nVérifiez les colonnes J à R.`,
+    SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function testExtraction1000() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.DATA_SHEET);
+  
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Erreur', `Feuille "${CONFIG.DATA_SHEET}" non trouvée`, SpreadsheetApp.getUi().ButtonSet.OK);
+    return;
+  }
+  
+  const lastRow = sheet.getLastRow();
+  const numRows = Math.min(1000, lastRow - CONFIG.DATA_START_ROW + 1);
+  
+  processBatch(sheet, CONFIG.DATA_START_ROW, numRows);
+  
+  SpreadsheetApp.getUi().alert('Test terminé', 
+    `${numRows} premières lignes traitées.\nVérifiez les colonnes J à R.`,
+    SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function configureSourceSheet() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  const sheets = ss.getSheets().map(s => s.getName());
+  
+  const response = ui.prompt(
+    'Configuration',
+    `Feuille actuelle: ${CONFIG.DATA_SHEET}\n\n` +
+    `Feuilles disponibles:\n${sheets.join('\n')}\n\n` +
+    `Entrez le nom de la feuille source:`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const newSheet = response.getResponseText().trim();
+    if (sheets.includes(newSheet)) {
+      CONFIG.DATA_SHEET = newSheet;
+      ui.alert('Configuration mise à jour', 
+        `Feuille source: ${newSheet}\n\nNote: Modifiez DATA_SHEET dans le code pour rendre permanent.`,
+        ui.ButtonSet.OK);
+    } else {
+      ui.alert('Erreur', `La feuille "${newSheet}" n'existe pas`, ui.ButtonSet.OK);
+    }
+  }
+}
+
+function debugExtraction() {
+  const testAdName = "Vidéo micro trottoir (Alice) mix plans de coupe immersion 2 (iPhone) - Grande vente de plantes - Event W03 Rennes - CTA S'inscrire - LP Eventbrite";
+  
+  const result = extractCategories(testAdName, testAdName.toUpperCase());
+  
+  SpreadsheetApp.getUi().alert('Debug Extraction',
+    `Ad Name:\n${testAdName}\n\n` +
+    `Média: ${result.media}\n` +
+    `Concept: ${result.concept}\n` +
+    `Sous-Concept: ${result.sousConept}\n` +
+    `Variante: ${result.variante}\n` +
+    `Hook: ${result.hook}\n` +
+    `Créateur: ${result.createur}\n` +
+    `FOMO: ${result.fomo}\n` +
+    `Week: ${result.week}\n` +
+    `Ville: ${result.ville}`,
+    SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function afficherAide() {
+  const ui = SpreadsheetApp.getUi();
+  
+  ui.alert('Aide - Extraction Créatives',
+    `COLONNES DE SORTIE :\n` +
+    `J: Média | K: Concept | L: Sous-Concept\n` +
+    `M: Variante | N: Hook | O: Créateur\n` +
+    `P: FOMO | Q: Week | R: Ville\n\n` +
+    `VALEURS PAR DÉFAUT :\n` +
+    `No Média, No Concept, No Sous-Concept,\n` +
+    `No Variante, No Hook, No UGC, No FOMO,\n` +
+    `No Week, No Ville\n\n` +
+    `CONFIGURATION :\n` +
+    `- Feuille source: ${CONFIG.DATA_SHEET}\n` +
+    `- Colonne Ad Name: B\n` +
+    `- Ligne de départ: 2\n\n` +
+    `PERFORMANCE :\n` +
+    `~5000 lignes/seconde`,
+    ui.ButtonSet.OK);
+}
